@@ -1,4 +1,4 @@
-version: '3.9'
+version: '3.7'
 
 volumes:
   postgres_data:
@@ -24,39 +24,76 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: test
+      POSTGRES_WAL_LEVEL: LOGICAL
+
   zookeeper:
-    image: docker-registry.x5.ru/zookeeper:3.5
-    hostname: zookeeper
+    image: confluentinc/cp-zookeeper:6.2.1
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
+
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:6.2.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
     depends_on:
       - zookeeper
-    ports:
-      - 29092:29092
-    hostname: kafka
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-  kconnect:
-    image: debezium/connect:3.0.0.Final
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  connect:
+    image: debezium/connect:2.3
+    restart: always
     ports:
-      - 8083:8083
+      - '8083:8083'
     environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: 1
       CONFIG_STORAGE_TOPIC: my_connect_configs
       OFFSET_STORAGE_TOPIC: my_connect_offsets
       STATUS_STORAGE_TOPIC: my_connect_statuses
-      BOOTSTRAP_SERVERS: kafka:29092
+      ENABLE_DEBEZIUM_SCRIPTING: 'true'
     links:
-      - zookeeper
+      - kafka
+      - postgres
+  kafka-rest:
+    image: confluentinc/cp-kafka-rest:7.2.1
+    container_name: kafka-rest
+    ports:
+      - "8082:8082"
     depends_on:
       - kafka
-      - zookeeper
+    environment:
+      KAFKA_REST_HOST_NAME: kafka-rest
+      KAFKA_REST_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_REST_LISTENERS: http://0.0.0.0:8082
+      KAFKA_REST_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+  debezium-ui:
+    image: debezium/debezium-ui:latest
+    container_name: debezium-ui
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      - DEBEZIUM_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DEBEZIUM_KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092
+      - DEBEZIUM_POSTGRES_HOST=postgres
+      - DEBEZIUM_POSTGRES_PORT=5432
+      - DEBEZIUM_POSTGRES_USER=admin
+      - DEBEZIUM_POSTGRES_PASSWORD=admin
+      - DEBEZIUM_POSTGRES_DATABASE=test
+      - DEBEZIUM_POSTGRES_SSL_MODE=disable
+      - DEBEZIUM_UI_PORT=8080
+      - KAFKA_CONNECT_URIS=http://connect:8083
